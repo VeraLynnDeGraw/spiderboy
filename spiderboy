@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# SPIDER BOY
+# A friendly command center for your desktop companion.
+# ============================================================
+
+set -u
+
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$PROJECT_DIR/.venv"
+PYTHON="$VENV_DIR/bin/python"
+SETTINGS="$PROJECT_DIR/spider/settings.py"
+REQUIREMENTS="$PROJECT_DIR/requirements.txt"
+
+show_header() {
+    echo
+    echo "  ======================================="
+    echo "                 SPIDER BOY"
+    echo "          Your little desktop friend"
+    echo "  ======================================="
+    echo
+}
+
+pause_screen() {
+    echo
+    read -r -p "Press Enter to return to the menu..." _ || true
+}
+
+setup_environment() {
+    echo
+    echo "SPIDER BOY SETUP"
+    echo "----------------"
+    echo "This prepares a private Python environment"
+    echo "inside the Spiderboy project folder."
+    echo
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Python 3 was not found."
+        echo
+        echo "Install Python 3 using your Linux software manager,"
+        echo "then try this setup again."
+        return 1
+    fi
+
+    echo "Found Python:"
+    python3 --version
+
+    if [[ ! -x "$PYTHON" ]]; then
+        echo
+        echo "Creating the private environment..."
+
+        if ! python3 -m venv "$VENV_DIR"; then
+            echo
+            echo "Could not create the Python environment."
+            echo "Your Linux installation may need Python venv support."
+            return 1
+        fi
+    fi
+
+    if [[ ! -f "$REQUIREMENTS" ]]; then
+        echo "The requirements.txt file is missing."
+        return 1
+    fi
+
+    echo
+    echo "Installing the packages Spiderboy needs..."
+    echo "An internet connection is required."
+
+    if ! "$PYTHON" -m pip install -r "$REQUIREMENTS"; then
+        echo
+        echo "Setup was not completed."
+        echo "Check your connection and try again."
+        return 1
+    fi
+
+    echo
+    echo "SUCCESS! Spiderboy is ready."
+}
+
+ensure_ready() {
+    if [[ -x "$PYTHON" ]] &&
+       "$PYTHON" -c "import PySide6" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo
+    echo "Spiderboy needs to be set up first."
+
+    if [[ ! -t 0 ]]; then
+        echo "Run: ./spiderboy setup"
+        return 1
+    fi
+
+    local answer
+    read -r -p "Set him up now? [Y/n] " answer || return 1
+
+    case "$answer" in
+        n|N|no|NO)
+            echo "No changes made."
+            return 1
+            ;;
+        *)
+            setup_environment
+            ;;
+    esac
+}
+
+run_spider() {
+    if ! ensure_ready; then
+        return 1
+    fi
+
+    echo
+    echo "Starting Spiderboy..."
+    echo "Use his desktop menu to quit."
+    echo
+
+    (
+        cd "$PROJECT_DIR" || exit 1
+        "$PYTHON" -u "$PROJECT_DIR/main.py" "$@"
+    )
+
+    local result=$?
+
+    if [[ $result -eq 0 ]]; then
+        echo
+        echo "Spiderboy closed safely."
+    else
+        echo
+        echo "Spiderboy stopped with an error."
+        echo "Run ./spiderboy verify for diagnostic information."
+    fi
+
+    return "$result"
+}
+
+run_tests() {
+    if ! ensure_ready; then
+        return 1
+    fi
+
+    echo
+    echo "Checking Python syntax..."
+
+    if ! "$PYTHON" -m py_compile \
+        "$PROJECT_DIR/main.py" \
+        "$PROJECT_DIR/verify.py" \
+        "$PROJECT_DIR"/spider/*.py \
+        "$PROJECT_DIR"/tests/*.py; then
+        echo "A Python syntax problem was found."
+        return 1
+    fi
+
+    echo "Syntax check: PASS"
+    echo
+    echo "Running Spiderboy's automated tests..."
+
+    (
+        cd "$PROJECT_DIR" || exit 1
+        QT_QPA_PLATFORM=offscreen \
+            "$PYTHON" -m unittest discover -s tests -v
+    )
+}
+
+verify_project() {
+    if ! ensure_ready; then
+        return 1
+    fi
+
+    echo
+    echo "Checking Spiderboy and your desktop..."
+
+    (
+        cd "$PROJECT_DIR" || exit 1
+        env -u QT_QPA_PLATFORM "$PYTHON" verify.py
+    )
+}
+
+create_backup() {
+    local backup_file
+    backup_file="$PROJECT_DIR/../spider-boy-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+
+    echo
+    echo "Creating a backup..."
+
+    if ! tar \
+        --exclude='./.git' \
+        --exclude='./.venv' \
+        --exclude='*/__pycache__' \
+        --exclude='*.pyc' \
+        --exclude='./.pytest_cache' \
+        -czf "$backup_file" \
+        -C "$PROJECT_DIR" .; then
+        echo "Backup creation failed."
+        return 1
+    fi
+
+    echo
+    echo "Backup created successfully:"
+    ls -lh "$backup_file"
+}
+
+clean_cache() {
+    echo
+    echo "This only removes generated Python and test cache files."
+    echo "Your source code, settings, tests, and virtual environment"
+    echo "will not be deleted."
+    echo
+
+    local answer
+    read -r -p "Continue? [y/N] " answer || return 1
+
+    case "$answer" in
+        y|Y|yes|YES)
+            ;;
+        *)
+            echo "Cleanup cancelled."
+            return 0
+            ;;
+    esac
+
+    find "$PROJECT_DIR" \
+        \( -path "$PROJECT_DIR/.git" -o \
+           -path "$PROJECT_DIR/.venv" \) -prune -o \
+        \( -type d \
+           \( -name "__pycache__" -o -name ".pytest_cache" \) \
+           -prune -exec rm -rf {} + \) -o \
+        \( -type f -name "*.pyc" -delete \)
+
+    echo "Project cache cleanup complete."
+}
+
+open_settings() {
+    if [[ ! -f "$SETTINGS" ]]; then
+        echo "The settings file could not be found:"
+        echo "$SETTINGS"
+        return 1
+    fi
+
+    echo
+    echo "Opening Spiderboy's customization settings..."
+    echo "$SETTINGS"
+    echo
+
+    if [[ -n "${VISUAL:-}" ]]; then
+        "$VISUAL" "$SETTINGS"
+    elif [[ -n "${EDITOR:-}" ]]; then
+        "$EDITOR" "$SETTINGS"
+    elif command -v nano >/dev/null 2>&1; then
+        nano "$SETTINGS"
+    elif command -v micro >/dev/null 2>&1; then
+        micro "$SETTINGS"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$SETTINGS" >/dev/null 2>&1 &
+        echo "Opened with your desktop's default text editor."
+    else
+        echo "Please open this file with your preferred text editor:"
+        echo "$SETTINGS"
+    fi
+}
+
+open_guide() {
+    local guide="$PROJECT_DIR/docs/GETTING_STARTED.md"
+
+    if [[ ! -f "$guide" ]]; then
+        guide="$PROJECT_DIR/README.md"
+    fi
+
+    if command -v less >/dev/null 2>&1; then
+        less -FRX "$guide"
+    else
+        cat "$guide"
+    fi
+}
+
+install_shortcut() {
+    local bin_dir="$HOME/.local/bin"
+    local shortcut="$bin_dir/spiderboy"
+
+    mkdir -p "$bin_dir" || return 1
+
+    if [[ -e "$shortcut" || -L "$shortcut" ]]; then
+        echo
+        echo "A file or shortcut already exists at:"
+        echo "$shortcut"
+        echo "Nothing was overwritten."
+        return 1
+    fi
+
+    {
+        echo '#!/usr/bin/env bash'
+        printf 'exec %q "$@"\n' "$PROJECT_DIR/spiderboy"
+    } > "$shortcut"
+
+    chmod +x "$shortcut"
+
+    echo
+    echo "Terminal shortcut created:"
+    echo "$shortcut"
+
+    case ":$PATH:" in
+        *":$bin_dir:"*)
+            echo
+            echo "You can now type: spiderboy"
+            ;;
+        *)
+            echo
+            echo "Your terminal does not currently search ~/.local/bin."
+            echo "You can use the full shortcut path:"
+            echo "  $shortcut"
+            echo
+            echo "We can configure your terminal PATH separately."
+            ;;
+    esac
+}
+
+show_help() {
+    cat <<'HELP'
+
+SPIDER BOY COMMANDS
+===================
+
+Open the friendly numbered menu:
+  ./spiderboy
+
+Start Spiderboy:
+  ./spiderboy run
+
+Prepare or repair his setup:
+  ./spiderboy setup
+
+Check his displays and application:
+  ./spiderboy verify
+
+Run automated tests:
+  ./spiderboy test
+
+Create a project backup:
+  ./spiderboy backup
+
+Remove generated project cache:
+  ./spiderboy clean-cache
+
+Open customization settings:
+  ./spiderboy customize
+
+Read the beginner guide:
+  ./spiderboy docs
+
+Install a convenient terminal shortcut:
+  ./spiderboy install
+
+Show this help:
+  ./spiderboy help
+
+The older ./run.sh launcher is also supported.
+
+HELP
+}
+
+show_menu() {
+    while true; do
+        show_header
+
+        echo "  What would you like to do?"
+        echo
+        echo "   1. Start Spiderboy"
+        echo "   2. Set up or repair Spiderboy"
+        echo "   3. Check that everything works"
+        echo "   4. Run automated tests"
+        echo "   5. Create a backup"
+        echo "   6. Customize Spiderboy"
+        echo "   7. Read the beginner guide"
+        echo "   8. Clean temporary project files"
+        echo "   9. Install a terminal shortcut"
+        echo "   0. Exit"
+        echo
+
+        local choice
+        read -r -p "Choose an option [0-9]: " choice || return 0
+
+        case "$choice" in
+            1) run_spider || true; pause_screen ;;
+            2) setup_environment || true; pause_screen ;;
+            3) verify_project || true; pause_screen ;;
+            4) run_tests || true; pause_screen ;;
+            5) create_backup || true; pause_screen ;;
+            6) open_settings || true; pause_screen ;;
+            7) open_guide; pause_screen ;;
+            8) clean_cache || true; pause_screen ;;
+            9) install_shortcut || true; pause_screen ;;
+            0)
+                echo
+                echo "Goodbye! Spiderboy will be waiting."
+                return 0
+                ;;
+            *)
+                echo
+                echo "Please choose a number between 0 and 9."
+                pause_screen
+                ;;
+        esac
+    done
+}
+
+case "${1:-menu}" in
+    menu)       show_menu ;;
+    setup)      setup_environment ;;
+    run|start)  shift; run_spider "$@" ;;
+    test|tests) run_tests ;;
+    verify|check) verify_project ;;
+    backup)     create_backup ;;
+    clean-cache|clean) clean_cache ;;
+    customize)  open_settings ;;
+    docs|guide) open_guide ;;
+    install)    install_shortcut ;;
+    help|-h|--help) show_help ;;
+    *)
+        echo "I don't recognize that command: $1"
+        show_help
+        exit 2
+        ;;
+esac

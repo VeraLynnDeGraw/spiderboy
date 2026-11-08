@@ -1,0 +1,1 @@
+"""Spiderboy spider package."""
